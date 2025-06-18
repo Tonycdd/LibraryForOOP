@@ -98,7 +98,7 @@ public:
 
 	// за потребители
 	// не го добавяме още в системата, а само информация за него, чак при логин ще го добавим целия
-	void addUser(const std::string& name, const std::string& password, bool isAdmin = false); 
+	void addUser(bool isAdmin = false); 
 	void removeUser(const std::string& name);
 	bool changeUser(const std::string&,const std::string&, const std::string&);
 

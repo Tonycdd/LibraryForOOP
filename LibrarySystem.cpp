@@ -101,72 +101,122 @@ LibrarySystem::~LibrarySystem()
 
 bool LibrarySystem::login(const std::string& username, const std::string& password)
 {
-    // трябва да проверим дали не е първо в системата
-    if (!canAddNewUser(username, password)) {
-        std::cerr << "This user is already in ourSystem!" << "\n";
+    // Check if a user is already logged in
+    if (currentPerson != nullptr) {
+        std::cerr << "You are already logged in as " << currentPerson->getUsername() << ". Please logout first.\n";
         return false;
     }
 
-    // иначе можем да го добавим
-    // трябва да отидем на мястото във файла и да го заредим в системата ни
+    // First check if the user exists in metadata
+    bool userFound = false;
     size_t filePos = 0;
-    for (size_t i = 0; i < infoUsers.size(); i++)
-    {
-        // намираме го
+    
+    for (size_t i = 0; i < infoUsers.size(); i++) {
         if (infoUsers[i].username == username) {
+            // Found the username, now check password
+            if (infoUsers[i].password != password) {
+                std::cerr << "Invalid username or password!\n";
+                return false;
+            }
+            
+            userFound = true;
             filePos = infoUsers[i].pos;
             break;
         }
     }
 
-    // тук отваряме отново файла
-    std::ifstream file(fileUsers, std::ios::binary | std::ios::in);
-    if (!file.is_open()) {
-        std::cerr << "Cannot open file!" << "\n";
+    // If user wasn't found in metadata
+    if (!userFound) {
+        std::cerr << "Invalid username or password!\n";
         return false;
     }
-    
-    // отиваме на дадената позиция във файла
-    file.seekg(filePos, std::ios::beg);
-    if (!file.good()) {
-        file.close();
-        return false;
-    }
-    TypeOfReader type;
-    file.read(reinterpret_cast<char*>(&type), sizeof(type));
-    if (!file.good()) {
-        file.close();
-        std::cerr << "Error with file!" << "\n";
-        return false;
-    }
-    LibraryPerson* newUser = nullptr;
-    try
-    {
-        // може да фейлне
-        newUser = LibraryFactory::createPersonFromStream(file, type);
-        newUser->lastLoginDate = Date(); // днес текущо време?
-    }
-    catch (...)
-    {
-        file.close();
-        throw;
-    }
-    // слагаме го във системата ни?
-    users.push_back(newUser);
 
-    currentPerson = newUser; // Важно е!
-    
-    return true;
+    try {
+        // Open the file and load the user
+        std::ifstream file(fileUsers, std::ios::binary);
+        if (!file.is_open()) {
+            std::cerr << "Cannot open users file!\n";
+            return false;
+        }
+        
+        // Seek to the user's position in the file
+        file.seekg(filePos, std::ios::beg);
+        if (!file.good()) {
+            file.close();
+            std::cerr << "Error seeking to user position in file!\n";
+            return false;
+        }
+
+        // Read the user type
+        TypeOfReader type;
+        file.read(reinterpret_cast<char*>(&type), sizeof(type));
+        if (!file.good()) {
+            file.close();
+            std::cerr << "Error reading user type from file!\n";
+            return false;
+        }
+
+        //// Skip username and password as we already have them
+        //size_t size;
+        //
+        //// Skip username length and username
+        //file.read(reinterpret_cast<char*>(&size), sizeof(size));
+        //if (!file.good()) {
+        //    file.close();
+        //    std::cerr << "Error reading username size from file!\n";
+        //    return false;
+        //}
+        //file.seekg(size, std::ios::cur); // Skip username content
+        //
+        //// Skip password length and password
+        //file.read(reinterpret_cast<char*>(&size), sizeof(size));
+        //if (!file.good()) {
+        //    file.close();
+        //    std::cerr << "Error reading password size from file!\n";
+        //    return false;
+        //}
+        //file.seekg(size, std::ios::cur); // Skip password content
+
+        //// Reset file position to beginning of the user record
+        //file.seekg(filePos, std::ios::beg);
+        
+        // Create the user object (this will read all data including username/password)
+        LibraryPerson* newUser = LibraryFactory::createPersonFromStream(file, type);
+        if (!newUser) {
+            file.close();
+            std::cerr << "Error creating user object from file!\n";
+            return false;
+        }
+        
+        // Update the last login date
+        newUser->lastLoginDate = Date(); // Current date
+        
+        // Close the file and add user to the system
+        file.close();
+        users.push_back(newUser);
+        currentPerson = newUser;
+        
+        // Display welcome message
+        std::cout << "Welcome, " << username << "!\n";
+        
+        return true;
+    }
+    catch (std::exception& e) {
+        std::cerr << "Error during login: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 bool LibrarySystem::logout()
 {
     if (!currentPerson) {
-        std::cerr << "There is no user in our system!" << "\n";
+        std::cerr << "There is no user currently logged in!\n";
         return false;
     }
 
+    std::string username = currentPerson->getUsername();
     currentPerson = nullptr;
+    std::cout << "User " << username << " has been successfully logged out.\n";
     return true;
 }
 
@@ -336,211 +386,219 @@ void LibrarySystem::findReaders(const std::string& option, const std::string& va
     }
 }
 
-bool LibrarySystem::serialize(std::ostream& file1, std::ostream& file2)const
+bool LibrarySystem::serialize(std::ostream& file1, std::ostream& file2) const
 {
     if (!file1 || !file2) {
-        throw std::invalid_argument("Invalid files!");
+        throw std::invalid_argument("Invalid stream arguments for serialization!");
     }
-
-    // иначе сериализираме всичките обекти във файл
-    size_t size = units.size();
-    file2.write(reinterpret_cast<const char*>(&size),sizeof(size));
-    if (!file2.good())
-    {
-        // не се грижим да затваряме файловете ние! 
-        throw std::ios_base::failure("Error with ofstream file!");
-    }
-
-    for (size_t i = 0; i < size; i++)
-    {
-        size_t pos = file2.tellp();
-
-        Type type = units[i]->getType();
-     
-        file2.write(reinterpret_cast<const char*>(&type), sizeof(type));
+    
+    try {
+        // Write units count
+        size_t size = units.size();
+        file2.write(reinterpret_cast<const char*>(&size), sizeof(size));
         if (!file2.good()) {
-         
-            throw std::ios_base::failure("Error with ofstream file!");
+            throw std::ios_base::failure("Error writing units count");
         }
-
-        unsigned int id = units[i]->getUniqueNumber();
-        file2.write(reinterpret_cast<const char*>(&id), sizeof(id));
-        if (!file2.good()) {
+        
+        // Write units
+        for (size_t i = 0; i < size; i++) {
+            // Record position before writing this unit
+            size_t pos = file2.tellp();
             
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        bool isFree = units[i]->isAvailable();
-        file2.write(reinterpret_cast<const char*>(&isFree), sizeof(isFree));
-        if (!file2.good()) {
+            // Write unit ID and availability status for the metadata
+            unsigned int id = units[i]->getUniqueNumber();
+            file2.write(reinterpret_cast<const char*>(&id), sizeof(id));
+            if (!file2.good()) {
+                throw std::ios_base::failure("Error writing unit ID");
+            }
             
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        units[i]->serialize(file2);
-        if (!file2.good()) {
+            bool isFree = units[i]->isAvailable();
+            file2.write(reinterpret_cast<const char*>(&isFree), sizeof(isFree));
+            if (!file2.good()) {
+                throw std::ios_base::failure("Error writing unit availability status");
+            }
             
-            throw std::ios_base::failure("Error with ofstream file!");
+            // Write the Type field
+            Type type = units[i]->getType();
+            file2.write(reinterpret_cast<const char*>(&type), sizeof(type));
+            if (!file2.good()) {
+                throw std::ios_base::failure("Error writing unit type");
+            }
+            
+            // Serialize the entire unit data using the public interface
+            units[i]->serialize(file2);
+            if (!file2.good()) {
+                throw std::ios_base::failure("Error serializing unit data");
+            }
+            
+            // Note: We no longer modify infoUnits here since this is a const method
         }
+        
+        // Write users count
+        size_t sizeOfUsers = users.size();
+        file1.write(reinterpret_cast<const char*>(&sizeOfUsers), sizeof(sizeOfUsers));
+        if (!file1.good()) {
+            throw std::ios_base::failure("Error writing users count");
+        }
+        
+        // Write users
+        for (size_t i = 0; i < sizeOfUsers; i++) {
+            // Record position before writing this user
+            size_t pos = file1.tellp();
+            
+            // Write user type
+            TypeOfReader type = users[i]->getType();
+            file1.write(reinterpret_cast<const char*>(&type), sizeof(type));
+            if (!file1.good()) {
+                throw std::ios_base::failure("Error writing user type");
+            }
+            
+            // Write username
+            std::string username = users[i]->getUsername();
+            size_t len = username.size();
+            file1.write(reinterpret_cast<const char*>(&len), sizeof(len));
+            if (!file1.good()) {
+                throw std::ios_base::failure("Error writing username length");
+            }
+            if (len > 0) {
+                file1.write(username.c_str(), len);
+                if (!file1.good()) {
+                    throw std::ios_base::failure("Error writing username");
+                }
+            }
+            
+            // Write password
+            std::string password = users[i]->getPassword();
+            len = password.size();
+            file1.write(reinterpret_cast<const char*>(&len), sizeof(len));
+            if (!file1.good()) {
+                throw std::ios_base::failure("Error writing password length");
+            }
+            if (len > 0) {
+                file1.write(password.c_str(), len);
+                if (!file1.good()) {
+                    throw std::ios_base::failure("Error writing password");
+                }
+            }
+            
+            // Serialize the rest of the user data
+            users[i]->serialize(file1);
+            if (!file1.good()) {
+                throw std::ios_base::failure("Error serializing user data");
+            }
+            
+            // Note: We no longer modify infoUsers here since this is a const method
+        }
+        
+        return true;
     }
-
-    if (!file2.good()) {
-      
-        throw std::ios_base::failure("Error with ofstream file!");
+    catch (std::exception& e) {
+        std::cerr << "Error during serialization: " << e.what() << std::endl;
+        throw; // Re-throw the exception after logging it
     }
-
-    size_t sizeOfUsers = users.size();
-
-    file1.write(reinterpret_cast<const char*>(&sizeOfUsers), sizeof(sizeOfUsers));
-    if (!file1.good()) {
-        throw std::ios_base::failure("Error with ofstream file!");
-    }
-
-    for (size_t i = 0; i < sizeOfUsers; i++)
-    {
-        size_t pos = file1.tellp();
-
-        TypeOfReader type = users[i]->getType();
-        file1.write(reinterpret_cast<const char*>(&type), sizeof(type));
-        if (!file1.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        std::string username = users[i]->getUsername();
-        size_t len = username.size();
-
-        file1.write(reinterpret_cast<const char*>(&len), sizeof(len));
-        if (!file1.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        file1.write(username.c_str(), len);
-        if (!file1.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        std::string password = users[i]->getPassword(); // затова е friend...
-        len = password.size();
-        file1.write(reinterpret_cast<const char*>(&len), sizeof(len));
-        if (!file1.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        file1.write(password.c_str(), len);
-        if (!file1.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        users[i]->serialize(file1);
-        if (!file1.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-    }if (!file1.good()) {
-        throw std::ios_base::failure("Error with ofstream file!");
-    }
-
-    return true;
 }
 
 bool LibrarySystem::deserialize(std::istream& file1, std::istream& file2)
 {
     if (!file1 || !file2) {
-        throw std::invalid_argument("Invalid arguments!");
+        throw std::invalid_argument("Invalid stream arguments for deserialization!");
     }
-    // от интренет за празен файл
-    if ((file2.tellg() == 0 && file2.peek() == std::ifstream::traits_type::eof())
-        ||(file1.tellg() == 0 && file1.peek() == std::ifstream::traits_type::eof())) {
+    
+    // Check for empty files
+    if ((file2.tellg() == 0 && file2.peek() == std::ifstream::traits_type::eof()) ||
+        (file1.tellg() == 0 && file1.peek() == std::ifstream::traits_type::eof())) {
         return false;
     }
-    size_t unitsCount;
-    file2.read(reinterpret_cast<char*>(&unitsCount), sizeof(unitsCount));
-    if (!file2) {
-        throw std::ios_base::failure("Error with ofstream file!");
-    }
-    for (size_t i = 0; i < unitsCount; ++i) {
-        size_t pos = file2.tellg();  // Записваме текущата позиция
-
-        Type type;
-        file2.read(reinterpret_cast<char*>(&type), sizeof(type));
-        if (!file2.good()) {
-            // не се грижим ние да затваряме файловете!
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        unsigned int id;
-        file2.read(reinterpret_cast<char*>(&id), sizeof(id));
-        if (!file2.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        bool isFree;
-        file2.read(reinterpret_cast<char*>(&isFree), sizeof(isFree));
-        if (!file2.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        // Пропускаме останалата част от обекта
-        LibraryUnit* temp = LibraryFactory::createUnitFromStream(file2, type);
-        delete temp; // само да минем по обекта, не го пазим
-
-        // те са валидни, тъй като сме създали веднъж обект
+    
+    try {
+        // Clear existing metadata before deserializing
+        infoUnits.clear();
+        infoUsers.clear();
         
-        UniqueIDAndFilePositions meta{ id, pos, isFree };
-        // примерно: this->unitMeta.push_back(meta);
-        infoUnits.push_back(meta);
+        // Read units count
+        size_t unitsCount;
+        file2.read(reinterpret_cast<char*>(&unitsCount), sizeof(unitsCount));
+        if (!file2.good()) {
+            throw std::ios_base::failure("Error reading units count from file");
+        }
+        
+        // Read units metadata
+        for (size_t i = 0; i < unitsCount; ++i) {
+            size_t pos = file2.tellg();  // Record current position
+            
+            // Read ID and availability first (as written in serialize)
+            unsigned int id;
+            file2.read(reinterpret_cast<char*>(&id), sizeof(id));
+            if (!file2.good()) {
+                throw std::ios_base::failure("Error reading unit ID");
+            }
+            
+            bool isFree;
+            file2.read(reinterpret_cast<char*>(&isFree), sizeof(isFree));
+            if (!file2.good()) {
+                throw std::ios_base::failure("Error reading unit availability status");
+            }
+            
+            // Read the type
+            Type type;
+            file2.read(reinterpret_cast<char*>(&type), sizeof(type));
+            if (!file2.good()) {
+                throw std::ios_base::failure("Error reading unit type");
+            }
+            
+            // Skip the rest of the unit data by creating and then deleting a temporary object
+            // This will read through the base unit data
+            file2.seekg(pos, std::ios::beg); // Go back to the start of this unit's data
+            
+            // Add metadata to our collection
+            infoUnits.push_back(UniqueIDAndFilePositions{id, pos, isFree});
+            
+            // Skip the data by creating and then deleting a temporary object
+            LibraryUnit* temp = LibraryFactory::createUnitFromStream(file2, type);
+            if (!temp) {
+                throw std::runtime_error("Failed to create unit object from stream");
+            }
+            delete temp;
+        }
+
+        // Read users count - this was missing in the original code!
+        size_t userCount;
+        file1.read(reinterpret_cast<char*>(&userCount), sizeof(userCount));
+        if (!file1.good()) {
+            throw std::ios_base::failure("Error reading user count from file");
+        }
+        
+        // Now read exactly 'userCount' users
+        for (size_t i = 0; i < userCount; ++i) {
+            size_t pos = file1.tellg();
+            
+            TypeOfReader type;
+            file1.read(reinterpret_cast<char*>(&type), sizeof(type));
+            if (!file1.good()) {
+                throw std::ios_base::failure("Error reading user type");
+            }
+                        
+            // Create the person object from the stream
+            LibraryPerson* temp = LibraryFactory::createPersonFromStream(file1, type);
+            if (!temp) {
+                throw std::runtime_error("Failed to create person object from stream");
+            }
+
+            // Add the user's info to our metadata collection
+            infoUsers.push_back(MetaInfoAboutUsers{temp->getUsername(), temp->getPassword(), pos});
+            
+            delete temp;
+            
+            // No need for debug output
+            std::cout << i + 1 << std::endl;
+        }
+        
+        return true;
     }
-
-    size_t userCount;
-    file1.read(reinterpret_cast<char*>(&userCount), sizeof(userCount));
-    if (!file1.good()) {
-        throw std::ios_base::failure("Error with ofstream file!");
+    catch (std::exception& e) {
+        std::cerr << "Error during deserialization: " << e.what() << std::endl;
+        throw; // Re-throw the exception after logging it
     }
-
-    for (size_t i = 0; i < userCount; ++i) {
-        size_t pos = file1.tellg();
-
-        TypeOfReader type;
-        file1.read(reinterpret_cast<char*>(&type), sizeof(type));
-        if (!file1.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        size_t usernameSize;
-        file1.read(reinterpret_cast<char*>(&usernameSize), sizeof(usernameSize));
-        if (!file1.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        std::string username(usernameSize, '\0');
-        file1.read(&username[0], usernameSize);
-        if (!file1.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        size_t passwordSize;
-        file1.read(reinterpret_cast<char*>(&passwordSize), sizeof(passwordSize));
-        if (!file1.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        std::string password(passwordSize, '\0');
-        file1.read(&password[0], passwordSize);
-        if (!file1.good()) {
-            throw std::ios_base::failure("Error with ofstream file!");
-        }
-
-        // Пропускаме останалата част от потребителя
-       
-         LibraryPerson* temp = LibraryFactory::createPersonFromStream(file1, type);
-         delete temp;
-      
-
-        MetaInfoAboutUsers meta{ username, password, pos };
-        // примерно: this->userMeta.push_back(meta);
-        infoUsers.push_back(meta);
-    }
-
-    return true;
 }
 
 void LibrarySystem::addUnit(const Type& type)
@@ -624,12 +682,13 @@ bool LibrarySystem::changeUnit(unsigned int id)
     return false;
 }
 
-void LibrarySystem::addUser(const std::string& name, const std::string& password, bool isAdmin)
+void LibrarySystem::addUser(bool isAdmin)
 {
     if (!currentPerson || currentPerson->getType() != TypeOfReader::ADMINISTRATOR) {
         std::cerr << "Only admins can do that operation!" << "\n";
         return;
     }
+    
     TypeOfReader type = READER;
     if(isAdmin){
         type = ADMINISTRATOR;
@@ -637,12 +696,99 @@ void LibrarySystem::addUser(const std::string& name, const std::string& password
 
     LibraryPerson* newItem = LibraryFactory::createPersonInteractively(type);
     if (newItem == nullptr) {
-        std::cerr << "Adding new unit been cancelled!" << "\n";
+        std::cerr << "Adding new user been cancelled!" << "\n";
         return;
     }
+    
+    // Add the user to the users vector
     users.push_back(newItem);
-    std::cout << "Successfully pushed new Unit in our system!" << "\n";
-    return;
+    
+    // To add the user to the file, we need to rewrite the entire file
+    // because we need to update the users count at the beginning of the file
+    std::ofstream tempFile(fileUsers + ".temp", std::ios::binary);
+    if (!tempFile.is_open()) {
+        std::cerr << "Cannot open temporary file to save user data!" << "\n";
+        return;
+    }
+    
+    // Write the updated user count
+    size_t sizeOfUsers = users.size();
+    tempFile.write(reinterpret_cast<const char*>(&sizeOfUsers), sizeof(sizeOfUsers));
+    if (!tempFile.good()) {
+        tempFile.close();
+        std::cerr << "Error writing user count to file!" << "\n";
+        return;
+    }
+    
+    // Write all users including the new one
+    for (size_t i = 0; i < users.size(); i++) {
+        // Record position for metadata
+        size_t pos = tempFile.tellp();
+
+        // Serialize the user
+        users[i]->serialize(tempFile);
+        if (!tempFile.good()) {
+            tempFile.close();
+            std::cerr << "Error serializing user data to file!" << "\n";
+            return;
+        }
+        
+        // Update metadata for this user
+        // For existing users, update position
+        bool found = false;
+        for (size_t j = 0; j < infoUsers.size(); j++) {
+            if (infoUsers[j].username == users[i]->getUsername()) {
+                infoUsers[j].pos = pos;
+                found = true;
+                break;
+            }
+        }
+        
+        // For the new user, add metadata
+        if (!found && users[i] == newItem) {
+            infoUsers.push_back(MetaInfoAboutUsers{newItem->getUsername(), newItem->getPassword(), pos});
+        }
+    }
+    
+    // Close the temporary file before attempting to rename it
+    tempFile.close();
+    
+    // In Windows, std::rename will fail if the destination file exists
+    // First try to remove the existing file if it exists
+    if (std::remove(fileUsers.c_str()) != 0) {
+        // If remove failed but the file doesn't exist, that's fine
+        // Otherwise, only show an error if it's not a "file not found" error
+        if (errno != ENOENT) {
+            std::cerr << "Warning: Could not remove existing file. " 
+                      << "Error code: " << errno << "\n";
+        }
+    }
+    
+    // Now try to rename the temporary file
+    if (std::rename((fileUsers + ".temp").c_str(), fileUsers.c_str()) != 0) {
+        std::cerr << "Failed to update the users file! Error code: " << errno << "\n";
+        // In case of failure, try a different approach - copy the content manually
+        std::ifstream src(fileUsers + ".temp", std::ios::binary);
+        std::ofstream dst(fileUsers, std::ios::binary | std::ios::trunc);
+        
+        if (src && dst) {
+            dst << src.rdbuf();
+            if (dst.good()) {
+                std::cout << "Successfully added new user " << newItem->getUsername() 
+                          << " to the system using file copy!\n";
+                // Remove the temporary file
+                src.close();
+                dst.close();
+                std::remove((fileUsers + ".temp").c_str());
+                return;
+            }
+        }
+        
+        std::cerr << "Critical error: could not update user data.\n";
+        return;
+    }
+    
+    std::cout << "Successfully added new user " << newItem->getUsername() << " to the system!\n";
 }
 
 void LibrarySystem::removeUser(const std::string& name)

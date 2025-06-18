@@ -15,7 +15,7 @@ LibraryPerson* LibraryFactory::createPersonFromStream(std::istream& in,const Typ
     case TypeOfReader::ADMINISTRATOR:
         return new Administrator(in);
     default:
-        throw std::runtime_error("Unknown LibraryUnit type!");
+        throw std::runtime_error("Unknown User type!");
     }
 }
 
